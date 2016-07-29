@@ -330,15 +330,55 @@ function entity_delete($entity_type, $id) {
 function entity_delete_multiple($entity_type, $ids) {
   $info = entity_get_info($entity_type);
   if (isset($info['deletion callback'])) {
-    foreach ($ids as $id) {
-      $info['deletion callback']($id);
-    }
+    batch_set(array('operations' => array($info['deletion callback'], $ids)));
+    batch_process('delete');
   }
   elseif (in_array('EntityAPIControllerInterface', class_implements($info['controller class']))) {
-    entity_get_controller($entity_type)->delete($ids);
+    $context['sandbox']['ids'] = $ids;
+    batch_set(array('operations' => array('entity_delete_batch', array(entity_get_controller($entity_type), 'delete'), $context)));
+    batch_process('delete');
   }
   else {
     return FALSE;
+  }
+}
+
+function entity_delete_batch($function, &$context){
+  /*
+  Set the number of entities you want to delete within a single iteration of the batch. This number
+  should be pretty low as it is the reason why we're creating the batch process in the first place.
+  */
+
+  // EAM: change to 100
+  $limit = 3;
+
+  /*
+  Set the variables that need to persist throughout the batch process. These need to be set inside
+  the $context array because that's what persists throughout the process.
+  */
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['title'] = "Deleting Entities";
+    $context['sandbox']['max'] = sizeof($context['sandbox']['ids']);
+  }
+
+  // Delete entities based on current progress and the $limit per page load. It's important that you
+  // get this right otherwise you can potentially get stuck in an infinite loop or the process won't do what
+  // you want it to.
+  for($i = $context['sandbox']['progress']; $i < $limit; $i++){
+    if($context['sandbox']['progress'] < $context['sandbox']['max']) {
+
+      call_user_func($function, $context['sandbox']['ids'][$i]);
+
+      $context['sandbox']['progress']++; // Used to keep track of how many entities we've already deleted.
+      $context['results'][] = check_plain($context['sandbox']['ids'][$i]); // Keep a running tab of all of the entities deleted.
+      $context['message'] = "Deleted entity " . $context['sandbox']['progress'] . " of " . $context['sandbox']['max'];
+    }
+  }
+
+  // Check if the batch is finished
+  if ($context['sandbox']['progress'] < $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
   }
 }
 
